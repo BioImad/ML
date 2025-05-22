@@ -1,0 +1,626 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Diabetes Prediction - Machine Learning Project\n",
+    "\n",
+    "## Progetto di classificazione per la predizione del diabete\n",
+    "\n",
+    "Questo notebook implementa un modello di machine learning per predire la presenza di diabete utilizzando Random Forest con ottimizzazioni avanzate."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 1. Import delle librerie"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import numpy as np\n",
+    "import pandas as pd\n",
+    "import seaborn as sns\n",
+    "import matplotlib.pyplot as plt\n",
+    "from sklearn.preprocessing import StandardScaler, OneHotEncoder\n",
+    "from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score, KFold\n",
+    "from sklearn.metrics import confusion_matrix, accuracy_score, classification_report, roc_curve, roc_auc_score\n",
+    "from sklearn.metrics import precision_score, recall_score, f1_score\n",
+    "from sklearn.ensemble import RandomForestClassifier\n",
+    "from sklearn.pipeline import Pipeline\n",
+    "from sklearn.compose import ColumnTransformer\n",
+    "from sklearn.experimental import enable_iterative_imputer\n",
+    "from sklearn.impute import IterativeImputer\n",
+    "from sklearn.ensemble import RandomForestRegressor\n",
+    "from imblearn.over_sampling import SMOTE\n",
+    "from sklearn.inspection import permutation_importance\n",
+    "import joblib\n",
+    "import warnings\n",
+    "warnings.simplefilter(action='ignore')\n",
+    "sns.set()\n",
+    "plt.style.use(\"ggplot\")\n",
+    "\n",
+    "print(\"✅ Librerie importate con successo!\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 2. Funzioni di utilità"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Funzione per generare un report con figure\n",
+    "def create_figure(fig_num, title):\n",
+    "    plt.figure(figsize=(12, 8))\n",
+    "    plt.suptitle(title, fontsize=16)\n",
+    "    return plt"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 3. Caricamento e prima esplorazione dei dati"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Caricamento del dataset\n",
+    "print(\"📊 Caricamento del dataset...\")\n",
+    "df = pd.read_csv(r\"C:\\Users\\imada\\Desktop\\MACHINE_LEARNING\\models\\diabetes.csv\")\n",
+    "print(f\"Dimensioni del dataset: {df.shape}\")\n",
+    "\n",
+    "# Prime righe del dataset\n",
+    "print(\"\\n🔍 Prime 5 righe del dataset:\")\n",
+    "display(df.head())"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Informazioni generali sul dataset\n",
+    "print(\"ℹ️ Informazioni sul dataset:\")\n",
+    "df.info()\n",
+    "\n",
+    "print(\"\\n📈 Statistiche descrittive:\")\n",
+    "display(df.describe())"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Distribuzione della variabile target\n",
+    "outcome_counts = df[\"Outcome\"].value_counts()\n",
+    "print(f\"🎯 Distribuzione della variabile target:\")\n",
+    "print(f\"Non diabetici (0): {outcome_counts[0]} ({outcome_counts[0]*100/len(df):.1f}%)\")\n",
+    "print(f\"Diabetici (1): {outcome_counts[1]} ({outcome_counts[1]*100/len(df):.1f}%)\")\n",
+    "\n",
+    "# Visualizzazione della distribuzione target\n",
+    "fig = create_figure(1, \"Distribuzione dei casi di diabete\")\n",
+    "plt.subplot(1, 2, 1)\n",
+    "df['Outcome'].value_counts().plot.pie(\n",
+    "    explode=[0, 0.1],\n",
+    "    autopct=\"%1.1f%%\",\n",
+    "    shadow=True,\n",
+    "    labels=['Non diabetico', 'Diabetico'],\n",
+    "    colors=['lightblue', 'lightcoral']\n",
+    ")\n",
+    "plt.ylabel('')\n",
+    "\n",
+    "plt.subplot(1, 2, 2)\n",
+    "sns.countplot(x='Outcome', data=df, palette=['lightblue', 'lightcoral'])\n",
+    "plt.xticks([0, 1], ['Non diabetico', 'Diabetico'])\n",
+    "plt.xlabel('Outcome')\n",
+    "plt.ylabel('Conteggio')\n",
+    "plt.tight_layout()\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Matrice di correlazione\n",
+    "fig = create_figure(2, \"Matrice di correlazione tra le variabili\")\n",
+    "sns.heatmap(df.corr(), annot=True, fmt='.2f', cmap='magma', center=0)\n",
+    "plt.tight_layout()\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 4. Analisi esplorativa approfondita"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Analisi delle differenze tra gruppi\n",
+    "print(\"📊 Differenze tra diabetici e non diabetici:\")\n",
+    "group_comparison = df.groupby(\"Outcome\").agg({\n",
+    "    'Pregnancies': ['mean', 'median'],\n",
+    "    'Glucose': ['mean', 'median'],\n",
+    "    'BMI': ['mean', 'median'],\n",
+    "    'Age': ['mean', 'median']\n",
+    "})\n",
+    "display(group_comparison)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Distribuzione delle variabili per outcome\n",
+    "fig = create_figure(3, \"Distribuzione delle variabili principali per outcome\")\n",
+    "\n",
+    "important_vars = ['Glucose', 'BMI', 'Age', 'Pregnancies']\n",
+    "for i, var in enumerate(important_vars):\n",
+    "    plt.subplot(2, 2, i+1)\n",
+    "    sns.boxplot(x='Outcome', y=var, data=df, palette=['lightblue', 'lightcoral'])\n",
+    "    plt.xticks([0, 1], ['Non diabetico', 'Diabetico'])\n",
+    "    plt.title(f'Distribuzione di {var}')\n",
+    "\n",
+    "plt.tight_layout()\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 5. Preprocessing dei dati"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "print(\"🔧 PREPROCESSING DEI DATI\")\n",
+    "\n",
+    "# Identificazione di valori sospetti (0)\n",
+    "print(\"\\n🔍 Conteggio di valori 0 nelle colonne (potenziali valori mancanti):\")\n",
+    "cols_to_replace = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']\n",
+    "zero_analysis = {}\n",
+    "for col in cols_to_replace:\n",
+    "    zero_count = (df[col] == 0).sum()\n",
+    "    zero_percentage = zero_count*100/len(df)\n",
+    "    zero_analysis[col] = {'count': zero_count, 'percentage': zero_percentage}\n",
+    "    print(f\"{col}: {zero_count} ({zero_percentage:.1f}%)\")\n",
+    "\n",
+    "# Visualizzazione dei valori zero\n",
+    "fig = create_figure(4, \"Percentuale di valori zero per colonna\")\n",
+    "cols = list(zero_analysis.keys())\n",
+    "percentages = [zero_analysis[col]['percentage'] for col in cols]\n",
+    "plt.bar(cols, percentages, color='lightcoral', alpha=0.7)\n",
+    "plt.ylabel('Percentuale di valori zero (%)')\n",
+    "plt.xticks(rotation=45)\n",
+    "plt.tight_layout()\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Sostituzione degli 0 con NaN\n",
+    "print(\"🔄 Sostituzione degli 0 con NaN...\")\n",
+    "df_processed = df.copy()\n",
+    "df_processed[cols_to_replace] = df_processed[cols_to_replace].replace(0, np.NaN)\n",
+    "\n",
+    "print(\"\\n📊 Valori mancanti dopo la sostituzione:\")\n",
+    "missing_summary = df_processed.isnull().sum()\n",
+    "missing_summary = missing_summary[missing_summary > 0]\n",
+    "display(pd.DataFrame({\n",
+    "    'Colonna': missing_summary.index,\n",
+    "    'Valori mancanti': missing_summary.values,\n",
+    "    'Percentuale': (missing_summary.values / len(df_processed) * 100).round(2)\n",
+    "}))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Imputazione dei valori mancanti con Random Forest\n",
+    "print(\"🤖 Imputazione dei valori mancanti con Random Forest...\")\n",
+    "\n",
+    "numeric_columns = ['Pregnancies', 'Glucose', 'BloodPressure', 'SkinThickness',\n",
+    "                   'Insulin', 'BMI', 'DiabetesPedigreeFunction', 'Age']\n",
+    "\n",
+    "X_num = df_processed[numeric_columns]\n",
+    "rf_imputer = IterativeImputer(\n",
+    "    estimator=RandomForestRegressor(n_estimators=10, random_state=0),\n",
+    "    max_iter=10,\n",
+    "    random_state=0\n",
+    ")\n",
+    "\n",
+    "print(\"⏳ Processo di imputazione in corso...\")\n",
+    "X_imputed = rf_imputer.fit_transform(X_num)\n",
+    "X_imputed_df = pd.DataFrame(X_imputed, columns=X_num.columns, index=X_num.index)\n",
+    "\n",
+    "# Ricostruzione del DataFrame\n",
+    "df_processed = pd.concat([X_imputed_df, df_processed[['Outcome']]], axis=1)\n",
+    "\n",
+    "print(\"✅ Imputazione completata!\")\n",
+    "print(f\"Valori mancanti rimasti: {df_processed.isnull().sum().sum()}\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Trattamento degli outlier per Insulin\n",
+    "print(\"🎯 Trattamento degli outlier per Insulin...\")\n",
+    "\n",
+    "# Visualizzazione prima del trattamento\n",
+    "fig = create_figure(5, \"Distribuzione di Insulin: Prima e Dopo il trattamento degli outlier\")\n",
+    "\n",
+    "plt.subplot(1, 2, 1)\n",
+    "sns.boxplot(y=df_processed[\"Insulin\"], color=\"lightcoral\")\n",
+    "plt.title(\"Prima del trattamento\")\n",
+    "plt.ylabel(\"Insulin\")\n",
+    "\n",
+    "# Trattamento outlier\n",
+    "Q1 = df_processed.Insulin.quantile(0.25)\n",
+    "Q3 = df_processed.Insulin.quantile(0.75)\n",
+    "IQR = Q3 - Q1\n",
+    "upper = Q3 + 1.5 * IQR\n",
+    "print(f\"Limite superiore per Insulin: {upper:.2f}\")\n",
+    "\n",
+    "outliers_count = (df_processed['Insulin'] > upper).sum()\n",
+    "print(f\"Outlier trovati: {outliers_count}\")\n",
+    "\n",
+    "df_processed.loc[df_processed['Insulin'] > upper, \"Insulin\"] = upper\n",
+    "\n",
+    "# Visualizzazione dopo il trattamento\n",
+    "plt.subplot(1, 2, 2)\n",
+    "sns.boxplot(y=df_processed[\"Insulin\"], color=\"lightgreen\")\n",
+    "plt.title(\"Dopo il trattamento\")\n",
+    "plt.ylabel(\"Insulin\")\n",
+    "\n",
+    "plt.tight_layout()\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 6. Feature Engineering"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "print(\"🛠️ FEATURE ENGINEERING\")\n",
+    "\n",
+    "# Creazione di categorie semplificate\n",
+    "print(\"\\n📊 Creazione di categorie...\")\n",
+    "\n",
+    "# Categorie BMI\n",
+    "df_processed['BMI_Category'] = pd.cut(\n",
+    "    df_processed['BMI'],\n",
+    "    bins=[0, 25, 30, float('inf')],\n",
+    "    labels=['Normal', 'Overweight', 'Obese']\n",
+    ")\n",
+    "\n",
+    "# Categorie Glucose\n",
+    "df_processed['Glucose_Category'] = pd.cut(\n",
+    "    df_processed['Glucose'],\n",
+    "    bins=[0, 100, 126, float('inf')],\n",
+    "    labels=['Normal', 'Prediabetes', 'Diabetes']\n",
+    ")\n",
+    "\n",
+    "print(\"✅ Categorie create con successo!\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Analisi delle nuove categorie\n",
+    "print(\"📈 Distribuzione delle nuove categorie:\")\n",
+    "\n",
+    "categorical_columns = ['BMI_Category', 'Glucose_Category']\n",
+    "\n",
+    "fig = create_figure(6, \"Distribuzione delle categorie create\")\n",
+    "\n",
+    "for i, col in enumerate(categorical_columns):\n",
+    "    plt.subplot(1, 2, i+1)\n",
+    "    df_processed[col].value_counts().plot.pie(\n",
+    "        autopct='%1.1f%%',\n",
+    "        colors=['lightblue', 'lightgreen', 'lightcoral']\n",
+    "    )\n",
+    "    plt.title(col)\n",
+    "    plt.ylabel('')\n",
+    "\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n",
+    "\n",
+    "# Tabelle di distribuzione\n",
+    "for col in categorical_columns:\n",
+    "    print(f\"\\n{col}:\")\n",
+    "    counts = df_processed[col].value_counts(normalize=True) * 100\n",
+    "    counts_df = pd.DataFrame(counts).reset_index()\n",
+    "    counts_df.columns = [col, 'Percentuale']\n",
+    "    counts_df['Percentuale'] = counts_df['Percentuale'].map(\"{:.2f}%\".format)\n",
+    "    display(counts_df)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 7. Preparazione dei dati per il modello"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "print(\"🎯 PREPARAZIONE DEI DATI PER IL MODELLO\")\n",
+    "\n",
+    "# Definizione variabili\n",
+    "y = df_processed['Outcome']\n",
+    "categorical_columns = ['BMI_Category', 'Glucose_Category']\n",
+    "\n",
+    "# Selezione delle feature\n",
+    "feature_columns = numeric_columns + categorical_columns\n",
+    "X = df_processed[feature_columns]\n",
+    "\n",
+    "print(f\"📊 Feature utilizzate: {len(feature_columns)}\")\n",
+    "print(f\"   - Numeriche: {len(numeric_columns)}\")\n",
+    "print(f\"   - Categoriche: {len(categorical_columns)}\")\n",
+    "\n",
+    "# Split train/test\n",
+    "X_train, X_test, y_train, y_test = train_test_split(\n",
+    "    X, y,\n",
+    "    test_size=0.2,\n",
+    "    random_state=42,\n",
+    "    stratify=y\n",
+    ")\n",
+    "\n",
+    "print(f\"\\n📊 Divisione dei dati:\")\n",
+    "print(f\"Training set: {X_train.shape[0]} campioni ({X_train.shape[0]/len(X)*100:.1f}%)\")\n",
+    "print(f\"Test set: {X_test.shape[0]} campioni ({X_test.shape[0]/len(X)*100:.1f}%)\")\n",
+    "\n",
+    "# Verifica bilanciamento\n",
+    "print(f\"\\n⚖️ Bilanciamento nel training set:\")\n",
+    "train_balance = y_train.value_counts(normalize=True) * 100\n",
+    "print(f\"Non diabetici: {train_balance[0]:.1f}%\")\n",
+    "print(f\"Diabetici: {train_balance[1]:.1f}%\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 8. Creazione della pipeline di preprocessing"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "print(\"🔧 CREAZIONE DELLA PIPELINE DI PREPROCESSING\")\n",
+    "\n",
+    "# Pipeline di preprocessing\n",
+    "numeric_transformer = StandardScaler()\n",
+    "categorical_transformer = OneHotEncoder(drop='first', sparse_output=False)\n",
+    "\n",
+    "preprocessor = ColumnTransformer(\n",
+    "    transformers=[\n",
+    "        ('num', numeric_transformer, numeric_columns),\n",
+    "        ('cat', categorical_transformer, categorical_columns)\n",
+    "    ]\n",
+    ")\n",
+    "\n",
+    "# Pipeline completa\n",
+    "rf_pipeline = Pipeline([\n",
+    "    ('preprocessor', preprocessor),\n",
+    "    ('classifier', RandomForestClassifier(random_state=42))\n",
+    "])\n",
+    "\n",
+    "print(\"✅ Pipeline creata con successo!\")\n",
+    "print(\"   - Standardizzazione per variabili numeriche\")\n",
+    "print(\"   - One-Hot Encoding per variabili categoriche\")\n",
+    "print(\"   - Random Forest Classifier\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 9. Ottimizzazione degli iperparametri"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "print(\"⚙️ OTTIMIZZAZIONE DEGLI IPERPARAMETRI\")\n",
+    "print(\"Focus su F1 score per bilanciare precision e recall...\")\n",
+    "\n",
+    "# Griglia di iperparametri ottimizzata\n",
+    "param_grid = {\n",
+    "    'classifier__n_estimators': [200, 300],\n",
+    "    'classifier__max_depth': [15, 20, None],\n",
+    "    'classifier__min_samples_split': [2, 5],\n",
+    "    'classifier__min_samples_leaf': [1, 2],\n",
+    "    'classifier__class_weight': ['balanced', {0: 1, 1: 2}]  # Peso maggiore alla classe minoritaria\n",
+    "}\n",
+    "\n",
+    "print(f\"🔍 Combinazioni da testare: {np.prod([len(v) for v in param_grid.values()])}\")\n",
+    "\n",
+    "# Grid search con F1 score\n",
+    "grid_search = GridSearchCV(\n",
+    "    rf_pipeline,\n",
+    "    param_grid=param_grid,\n",
+    "    cv=3,\n",
+    "    scoring='f1',  # Focus su F1 invece che accuracy\n",
+    "    n_jobs=-1,\n",
+    "    verbose=1\n",
+    ")\n",
+    "\n",
+    "print(\"⏳ Avvio ottimizzazione...\")\n",
+    "grid_search.fit(X_train, y_train)\n",
+    "print(\"✅ Ottimizzazione completata!\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Risultati dell'ottimizzazione\n",
+    "print(\"🏆 RISULTATI DELL'OTTIMIZZAZIONE\")\n",
+    "print(f\"\\nMiglior F1 score in cross-validation: {grid_search.best_score_:.4f}\")\n",
+    "\n",
+    "print(\"\\n🎯 Migliori iperparametri:\")\n",
+    "for param, value in grid_search.best_params_.items():\n",
+    "    print(f\"   {param.replace('classifier__', '')}: {value}\")\n",
+    "\n",
+    "best_rf = grid_search.best_estimator_\n",
+    "print(\"\\n✅ Modello ottimizzato salvato!\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 10. Valutazione del modello"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "print(\"📊 VALUTAZIONE DEL MODELLO\")\n",
+    "\n",
+    "# Predizioni base\n",
+    "y_pred = best_rf.predict(X_test)\n",
+    "y_prob = best_rf.predict_proba(X_test)[:, 1]\n",
+    "\n",
+    "# Metriche con soglia standard (0.5)\n",
+    "print(\"\\n📈 Risultati con soglia standard (0.5):\")\n",
+    "print(f\"Accuracy: {accuracy_score(y_test, y_pred):.4f}\")\n",
+    "print(f\"Precision: {precision_score(y_test, y_pred):.4f}\")\n",
+    "print(f\"Recall: {recall_score(y_test, y_pred):.4f}\")\n",
+    "print(f\"F1 Score: {f1_score(y_test, y_pred):.4f}\")\n",
+    "print(f\"ROC AUC: {roc_auc_score(y_test, y_prob):.4f}\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Ottimizzazione della soglia di decisione\n",
+    "print(\"🎯 OTTIMIZZAZIONE DELLA SOGLIA DI DECISIONE\")\n",
+    "\n",
+    "from sklearn.metrics import precision_recall_curve\n",
+    "\n",
+    "precision, recall, thresholds = precision_recall_curve(y_test, y_prob)\n",
+    "f1_scores = 2 * (precision * recall) / (precision + recall)\n",
+    "\n",
+    "# Trova la soglia che massimizza F1\n",
+    "best_threshold_idx = np.argmax(f1_scores)\n",
+    "best_threshold = thresholds[best_threshold_idx]\n",
+    "\n",
+    "print(f\"\\n🎯 Migliore soglia trovata: {best_threshold:.3f}\")\n",
+    "print(f\"F1 score con nuova soglia: {f1_scores[best_threshold_idx]:.4f}\")\n",
+    "\n",
+    "# Predizioni con soglia ottimizzata\n",
+    "y_pred_optimized = (y_prob >= best_threshold).astype(int)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Confronto risultati\n",
+    "print(\"⚖️ CONFRONTO RISULTATI\")\n",
+    "\n",
+    "results_comparison = pd.DataFrame({\n",
+    "    'Metrica': ['Accuracy', 'Precision', 'Recall', 'F1 Score'],\n",
+    "    'Soglia 0.5': [\n",
+    "        accuracy_score(y_test, y_pred),\n",
+    "        precision_score(y_test, y_pred),\n",
+    "        recall_score(y_test, y_pred),\n",
+    "        f1_score(y_test, y_pred)\n",
+    "    ],\n",
+    "    f'Soglia {best_threshold:.3f}': [\n",
+    "        accuracy_score(y_test, y_pred_optimized),\n",
+    "        precision_score(y_test, y_pred_optimized),\n",
+    "        recall_score(y_test, y_pred_optimized),\n",
+    "        f1_score(y_test, y_pred_optimized)\n",
+    "    ]\n",
+    "})\n",
+    "\n",
+    "results_comparison['Miglioramento'] = results_comparison[f'Soglia {best_threshold:.3f}'] - results_comparison['Soglia 0.5']\n",
+    "results_comparison = results_comparison.round(4)\n",
+    "\n",
+    "print(\"\\n📊 Tabella di confronto:\")\n",
+    "display(results_comparison)\n",
+    "\n",
+    "# Evidenzia i miglioramenti\n",
+    "improvements = results_comparison[results_comparison['Miglioramento'] > 0]\n",
+    "if len(improvements) > 0:\n",
+    "    print(f\"\\
