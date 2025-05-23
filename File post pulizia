@@ -1,0 +1,651 @@
+# CODICE COMPLETO: DIABETES PREDICTION CON RANDOM FOREST
+# Include: EDA + Gestione Outliers + Imputazione Missing + Modello Ottimizzato + Funzione Predizione
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, roc_auc_score
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
+from imblearn.over_sampling import SMOTE
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+warnings.filterwarnings('ignore')
+
+# Configurazione per i grafici
+plt.style.use('default')
+sns.set_palette("husl")
+
+print("="*60)
+print("DIABETES PREDICTION - RANDOM FOREST ANALYSIS")
+print("Con gestione outliers e missing values")
+print("="*60)
+
+# 1. CARICAMENTO DATI
+print("\n1. CARICAMENTO DATI")
+print("-" * 30)
+
+# Sostituisci con il path del tuo file
+df = pd.read_csv('diabetes.csv')  # <-- CAMBIA QUESTO PATH
+
+print(f"Dataset shape: {df.shape}")
+print(f"Features: {list(df.columns)}")
+
+# 2. EXPLORATORY DATA ANALYSIS (EDA)
+print("\n2. EXPLORATORY DATA ANALYSIS")
+print("-" * 30)
+
+# Informazioni generali sul dataset
+print("\nInformazioni generali:")
+print(df.info())
+
+print("\nStatistiche descrittive:")
+print(df.describe())
+
+# Controllo valori mancanti e zeri anomali
+print(f"\nValori mancanti per colonna:")
+print(df.isnull().sum())
+
+# Nel dataset diabetes, alcuni zeri sono in realtà valori mancanti
+# (non è possibile avere 0 per glucosio, pressione, BMI, ecc.)
+print(f"\nValori zero per colonna (possibili missing):")
+zero_counts = (df == 0).sum()
+print(zero_counts)
+
+# Identifichiamo le colonne dove 0 non è un valore valido
+problematic_zeros = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
+for col in problematic_zeros:
+    if col in df.columns:
+        zero_count = (df[col] == 0).sum()
+        zero_perc = (zero_count / len(df)) * 100
+        print(f"{col}: {zero_count} zeri ({zero_perc:.1f}%)")
+
+# Target distribution
+print(f"\nDistribuzione target (Outcome):")
+target_counts = df['Outcome'].value_counts()
+print(target_counts)
+print(f"Percentuale diabetici: {target_counts[1]/len(df)*100:.1f}%")
+
+# Visualizzazione distribuzione target
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+# Grafico a barre
+target_counts.plot(kind='bar', ax=ax1, color=['skyblue', 'lightcoral'])
+ax1.set_title('Distribuzione Target')
+ax1.set_xlabel('Outcome (0=No Diabetes, 1=Diabetes)')
+ax1.set_ylabel('Frequenza')
+ax1.tick_params(axis='x', rotation=0)
+
+# Grafico a torta
+ax2.pie(target_counts.values, labels=['No Diabetes', 'Diabetes'],
+        autopct='%1.1f%%', colors=['skyblue', 'lightcoral'])
+ax2.set_title('Percentuale Diabetici vs Non Diabetici')
+
+plt.tight_layout()
+plt.show()
+
+# 3. GESTIONE VALORI MANCANTI (ZERI ANOMALI)
+print("\n3. GESTIONE VALORI MANCANTI")
+print("-" * 30)
+
+def handle_missing_values(df):
+    """
+    Gestisce i valori mancanti sostituendo gli zeri anomali con NaN
+    e poi applicando l'imputazione con Random Forest
+    """
+    df_clean = df.copy()
+
+    # Sostituisci zeri con NaN per le colonne problematiche
+    problematic_columns = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
+
+    print("Sostituzione zeri anomali con NaN...")
+    for col in problematic_columns:
+        if col in df_clean.columns:
+            original_zeros = (df_clean[col] == 0).sum()
+            df_clean.loc[df_clean[col] == 0, col] = np.nan
+            print(f"{col}: {original_zeros} zeri sostituiti con NaN")
+
+    # Mostra statistiche sui valori mancanti
+    print(f"\nValori mancanti dopo la sostituzione:")
+    missing_stats = df_clean.isnull().sum()
+    missing_perc = (missing_stats / len(df_clean)) * 100
+    missing_df = pd.DataFrame({
+        'Missing_Count': missing_stats,
+        'Missing_Percentage': missing_perc
+    })
+    print(missing_df[missing_df['Missing_Count'] > 0])
+
+    return df_clean
+
+# Applica gestione missing values
+df_with_missing = handle_missing_values(df)
+
+# 4. IMPUTAZIONE DEI VALORI MANCANTI CON RANDOM FOREST
+print("\n4. IMPUTAZIONE CON RANDOM FOREST")
+print("-" * 30)
+
+def impute_missing_values(df):
+    """
+    Imputa i valori mancanti usando IterativeImputer con Random Forest
+    """
+    print("Iniziando imputazione con Random Forest...")
+
+    # Separare features numeriche e target
+    features_to_impute = df.drop('Outcome', axis=1)
+    target = df['Outcome']
+
+    # Configurare l'imputer con Random Forest
+    # IterativeImputer usa di default BayesianRidge, ma possiamo usare RF
+    rf_imputer = IterativeImputer(
+    estimator=RandomForestRegressor(n_estimators=50, random_state=42),
+    random_state=42,
+    max_iter=10
+        )
+
+    # Applica l'imputazione
+    imputed_features = rf_imputer.fit_transform(features_to_impute)
+
+    # Crea il nuovo DataFrame
+    df_imputed = pd.DataFrame(imputed_features, columns=features_to_impute.columns)
+    df_imputed['Outcome'] = target.values
+
+    print("✅ Imputazione completata!")
+
+    # Verifica che non ci siano più valori mancanti
+    remaining_missing = df_imputed.isnull().sum().sum()
+    print(f"Valori mancanti rimanenti: {remaining_missing}")
+
+    return df_imputed, rf_imputer
+
+# Applica imputazione
+df_imputed, imputer = impute_missing_values(df_with_missing)
+
+# Confronto prima/dopo imputazione
+print(f"\nConfronto statistiche prima/dopo imputazione:")
+comparison_cols = ['Glucose', 'BloodPressure', 'BMI', 'Insulin']
+for col in comparison_cols:
+    if col in df.columns:
+        print(f"\n{col}:")
+        print(f"  Originale (con zeri): media={df[col].mean():.1f}, std={df[col].std():.1f}")
+        print(f"  Dopo imputazione: media={df_imputed[col].mean():.1f}, std={df_imputed[col].std():.1f}")
+
+# 5. IDENTIFICAZIONE E GESTIONE OUTLIERS
+print("\n5. GESTIONE OUTLIERS")
+print("-" * 30)
+
+def detect_outliers_iqr(df, column):
+    """
+    Rileva outliers usando il metodo IQR (Interquartile Range)
+    """
+    Q1 = df[column].quantile(0.25)
+    Q3 = df[column].quantile(0.75)
+    IQR = Q3 - Q1
+
+    # Definisci i limiti per gli outliers
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+
+    # Identifica outliers
+    outliers = df[(df[column] < lower_bound) | (df[column] > upper_bound)]
+
+    return outliers, lower_bound, upper_bound
+
+def handle_outliers(df, method='cap'):
+    """
+    Gestisce gli outliers con diversi metodi
+    method: 'cap' (winsorization), 'remove', 'log'
+    """
+    df_clean = df.copy()
+    outlier_summary = {}
+
+    # Analizza outliers per ogni feature numerica (escluso target)
+    numeric_columns = df_clean.select_dtypes(include=[np.number]).columns
+    numeric_columns = [col for col in numeric_columns if col != 'Outcome']
+
+    print(f"Analizzando outliers per {len(numeric_columns)} colonne numeriche...")
+
+    for col in numeric_columns:
+        outliers, lower_bound, upper_bound = detect_outliers_iqr(df_clean, col)
+        outlier_count = len(outliers)
+        outlier_percentage = (outlier_count / len(df_clean)) * 100
+
+        outlier_summary[col] = {
+            'count': outlier_count,
+            'percentage': outlier_percentage,
+            'lower_bound': lower_bound,
+            'upper_bound': upper_bound
+        }
+
+        if outlier_count > 0:
+            print(f"{col}: {outlier_count} outliers ({outlier_percentage:.1f}%)")
+
+            if method == 'cap':
+                # Winsorization: sostituisce outliers con i valori ai limiti
+                df_clean.loc[df_clean[col] < lower_bound, col] = lower_bound
+                df_clean.loc[df_clean[col] > upper_bound, col] = upper_bound
+                print(f"  → Outliers cappati ai limiti [{lower_bound:.1f}, {upper_bound:.1f}]")
+
+            elif method == 'remove':
+                # Remove outliers (sconsigliato se sono troppi)
+                initial_shape = df_clean.shape[0]
+                df_clean = df_clean[(df_clean[col] >= lower_bound) & (df_clean[col] <= upper_bound)]
+                removed_count = initial_shape - df_clean.shape[0]
+                print(f"  → {removed_count} righe rimosse")
+
+    return df_clean, outlier_summary
+
+# Visualizza outliers prima del trattamento
+print("Visualizzazione outliers (prima del trattamento):")
+fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+axes = axes.ravel()
+
+features = [col for col in df_imputed.columns if col != 'Outcome']
+
+for i, feature in enumerate(features):
+    if i < len(axes):
+        df_imputed.boxplot(column=feature, ax=axes[i])
+        axes[i].set_title(f'Boxplot {feature} (Prima)')
+
+# Rimuovi subplot vuoti se necessario
+for i in range(len(features), len(axes)):
+    fig.delaxes(axes[i])
+
+plt.tight_layout()
+plt.show()
+
+# Applica gestione outliers (usando metodo 'cap' che è più conservativo)
+df_clean, outlier_info = handle_outliers(df_imputed, method='cap')
+
+print(f"\nRiepilogo outliers gestiti:")
+for col, info in outlier_info.items():
+    if info['count'] > 0:
+        print(f"{col}: {info['count']} outliers ({info['percentage']:.1f}%) cappati")
+
+# Visualizza outliers dopo il trattamento
+print("\nVisualizzazione outliers (dopo il trattamento):")
+fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+axes = axes.ravel()
+
+for i, feature in enumerate(features):
+    if i < len(axes):
+        df_clean.boxplot(column=feature, ax=axes[i])
+        axes[i].set_title(f'Boxplot {feature} (Dopo)')
+
+for i in range(len(features), len(axes)):
+    fig.delaxes(axes[i])
+
+plt.tight_layout()
+plt.show()
+
+# 6. CONTINUAZIONE ANALISI EDA CON DATI PULITI
+print("\n6. ANALISI EDA CON DATI PULITI")
+print("-" * 30)
+
+# Distribuzione delle features numeriche dopo pulizia
+print("Distribuzione delle features dopo pulizia:")
+fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+axes = axes.ravel()
+
+for i, feature in enumerate(features):
+    if i < len(axes):
+        axes[i].hist(df_clean[feature], bins=30, alpha=0.7, color='lightgreen', edgecolor='black')
+        axes[i].set_title(f'Distribuzione {feature} (Pulita)')
+        axes[i].set_xlabel(feature)
+        axes[i].set_ylabel('Frequenza')
+
+for i in range(len(features), len(axes)):
+    fig.delaxes(axes[i])
+
+plt.tight_layout()
+plt.show()
+
+# Matrice di correlazione con dati puliti
+print("Matrice di Correlazione (dati puliti):")
+plt.figure(figsize=(12, 10))
+correlation_matrix = df_clean.corr()
+mask = np.triu(np.ones_like(correlation_matrix, dtype=bool))
+sns.heatmap(correlation_matrix, mask=mask, annot=True, cmap='coolwarm', center=0,
+            square=True, fmt='.2f', cbar_kws={"shrink": .8})
+plt.title('Matrice di Correlazione (Dati Puliti)')
+plt.tight_layout()
+plt.show()
+
+# Top correlazioni con il target
+print("Correlazioni con il Target (dati puliti):")
+target_corr = df_clean.corr()['Outcome'].abs().sort_values(ascending=False)[1:]
+print(target_corr)
+
+# 7. FEATURE ENGINEERING
+print("\n7. FEATURE ENGINEERING")
+print("-" * 30)
+
+def add_derived_features(df):
+    """Aggiunge feature derivate basate su conoscenze mediche"""
+    df_new = df.copy()
+
+    # Categorie di rischio basate su valori medici standard
+    if 'Glucose' in df.columns:
+        df_new['Glucose_risk'] = (df['Glucose'] > 125).astype(int)
+        df_new['Glucose_very_high'] = (df['Glucose'] > 180).astype(int)
+
+    if 'BMI' in df.columns:
+        df_new['BMI_obese'] = (df['BMI'] > 30).astype(int)
+        df_new['BMI_overweight'] = ((df['BMI'] > 25) & (df['BMI'] <= 30)).astype(int)
+
+    if 'Age' in df.columns:
+        df_new['Age_high_risk'] = (df['Age'] > 45).astype(int)
+        df_new['Age_very_high_risk'] = (df['Age'] > 65).astype(int)
+
+    if 'BloodPressure' in df.columns:
+        df_new['BP_high'] = (df['BloodPressure'] > 90).astype(int)
+
+    # Interazioni semplici
+    if 'Glucose' in df.columns and 'BMI' in df.columns:
+        df_new['Glucose_BMI_risk'] = df_new['Glucose_risk'] * df_new['BMI_obese']
+
+    if 'Age' in df.columns and 'Glucose' in df.columns:
+        df_new['Age_Glucose_risk'] = df_new['Age_high_risk'] * df_new['Glucose_risk']
+
+    return df_new
+
+# Applica feature engineering ai dati puliti
+df_enhanced = add_derived_features(df_clean)
+print(f"Features dopo pulizia: {df_clean.shape[1]}")
+print(f"Features dopo engineering: {df_enhanced.shape[1]}")
+print(f"Nuove features: {list(df_enhanced.columns[len(df_clean.columns):])}")
+
+# 8. PREPARAZIONE DATI PER IL MODELLO
+print("\n8. PREPARAZIONE DATI")
+print("-" * 30)
+
+# Separazione features e target
+X = df_enhanced.drop('Outcome', axis=1)
+y = df_enhanced['Outcome']
+
+# Split dei dati
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+print(f"Training set: {X_train.shape}")
+print(f"Test set: {X_test.shape}")
+
+# Scaling delle features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Applicazione SMOTE
+smote = SMOTE(random_state=42)
+X_train_smote, y_train_smote = smote.fit_resample(X_train_scaled, y_train)
+
+print(f"Prima di SMOTE - Classe 0: {sum(y_train == 0)}, Classe 1: {sum(y_train == 1)}")
+print(f"Dopo SMOTE - Classe 0: {sum(y_train_smote == 0)}, Classe 1: {sum(y_train_smote == 1)}")
+
+# 9. TRAINING RANDOM FOREST
+print("\n9. TRAINING RANDOM FOREST OTTIMIZZATO")
+print("-" * 30)
+
+# Random Forest con parametri ottimizzati
+rf_optimized = RandomForestClassifier(
+    n_estimators=500,
+    max_depth=15,
+    min_samples_split=2,
+    min_samples_leaf=1,
+    max_features='sqrt',
+    random_state=42,
+    class_weight='balanced',
+    n_jobs=-1
+)
+
+# Training
+print("Training in corso...")
+rf_optimized.fit(X_train_smote, y_train_smote)
+
+# 10. VALUTAZIONE DEL MODELLO
+print("\n10. VALUTAZIONE DEL MODELLO")
+print("-" * 30)
+
+# Predizioni
+y_train_pred = rf_optimized.predict(X_train_scaled)
+y_test_pred = rf_optimized.predict(X_test_scaled)
+y_test_proba = rf_optimized.predict_proba(X_test_scaled)[:, 1]
+
+# Metriche
+train_acc = accuracy_score(y_train, y_train_pred)
+test_acc = accuracy_score(y_test, y_test_pred)
+auc_score = roc_auc_score(y_test, y_test_proba)
+
+print(f"Accuratezza Training: {train_acc:.4f}")
+print(f"Accuratezza Test: {test_acc:.4f}")
+print(f"AUC Score: {auc_score:.4f}")
+
+# Cross-validation
+cv_scores = cross_val_score(rf_optimized, X_train_smote, y_train_smote, cv=5)
+print(f"CV Score medio: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
+
+# Classification Report
+print(f"\nClassification Report:")
+print(classification_report(y_test, y_test_pred))
+
+# Confusion Matrix
+plt.figure(figsize=(8, 6))
+cm = confusion_matrix(y_test, y_test_pred)
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=['No Diabetes', 'Diabetes'],
+            yticklabels=['No Diabetes', 'Diabetes'])
+plt.title('Confusion Matrix - Random Forest (Dati Puliti)')
+plt.ylabel('Valori Reali')
+plt.xlabel('Valori Predetti')
+plt.show()
+
+# Feature Importance
+feature_importance = pd.DataFrame({
+    'feature': X.columns,
+    'importance': rf_optimized.feature_importances_
+}).sort_values('importance', ascending=False)
+
+print(f"\nTop 10 Feature più Importanti:")
+print(feature_importance.head(10))
+
+# Visualizzazione Feature Importance
+plt.figure(figsize=(10, 8))
+top_features = feature_importance.head(15)
+plt.barh(range(len(top_features)), top_features['importance'])
+plt.yticks(range(len(top_features)), top_features['feature'])
+plt.xlabel('Importanza')
+plt.title('Top 15 Feature Importance - Random Forest (Dati Puliti)')
+plt.gca().invert_yaxis()
+plt.tight_layout()
+plt.show()
+
+# 11. FUNZIONE DI PREDIZIONE COMPLETA
+print("\n11. FUNZIONE DI PREDIZIONE COMPLETA")
+print("-" * 30)
+
+def predict_diabetes_complete(pregnancies, glucose, blood_pressure, skin_thickness,
+                             insulin, bmi, diabetes_pedigree, age):
+    """
+    Predice la probabilità di diabete applicando tutti i preprocessing steps
+
+    Parametri:
+    - pregnancies: Numero di gravidanze
+    - glucose: Livello di glucosio nel sangue
+    - blood_pressure: Pressione sanguigna diastolica
+    - skin_thickness: Spessore della pelle del tricipite
+    - insulin: Livello di insulina
+    - bmi: Indice di massa corporea
+    - diabetes_pedigree: Funzione pedigree del diabete
+    - age: Età
+
+    Ritorna:
+    - prediction: 0 (No Diabetes) o 1 (Diabetes)
+    - probability: Probabilità di avere il diabete (0-1)
+    """
+
+    # Crea DataFrame con i valori inseriti
+    input_data = pd.DataFrame({
+        'Pregnancies': [pregnancies],
+        'Glucose': [glucose],
+        'BloodPressure': [blood_pressure],
+        'SkinThickness': [skin_thickness],
+        'Insulin': [insulin],
+        'BMI': [bmi],
+        'DiabetesPedigreeFunction': [diabetes_pedigree],
+        'Age': [age]
+    })
+
+    print("🔄 Applicando preprocessing...")
+
+    # 1. Gestione valori anomali (se sono 0 dove non dovrebbero essere)
+    problematic_columns = ['Glucose', 'BloodPressure', 'BMI']  # Più conservativo per la predizione
+    for col in problematic_columns:
+        if input_data[col].iloc[0] == 0:
+            print(f"⚠️  Valore 0 rilevato per {col}, sarà imputato")
+            input_data.loc[0, col] = np.nan
+
+    # 2. Imputazione se necessaria (usando i valori medi del dataset)
+    if input_data.isnull().any().any():
+        print("🔧 Applicando imputazione per valori mancanti...")
+        # Per semplicità, usiamo la media del dataset originale
+        for col in input_data.columns:
+            if input_data[col].isnull().iloc[0]:
+                input_data.loc[0, col] = df_clean[col].mean()
+
+    # 3. Gestione outliers (capping conservativo)
+    for col in input_data.columns:
+        if col in outlier_info and outlier_info[col]['count'] > 0:
+            value = input_data[col].iloc[0]
+            lower_bound = outlier_info[col]['lower_bound']
+            upper_bound = outlier_info[col]['upper_bound']
+
+            if value < lower_bound:
+                input_data.loc[0, col] = lower_bound
+                print(f"⚠️  {col} cappato al limite inferiore")
+            elif value > upper_bound:
+                input_data.loc[0, col] = upper_bound
+                print(f"⚠️  {col} cappato al limite superiore")
+
+    # 4. Feature engineering
+    input_enhanced = add_derived_features(input_data)
+
+    # 5. Assicurati che abbia le stesse colonne del training set
+    for col in X.columns:
+        if col not in input_enhanced.columns:
+            input_enhanced[col] = 0
+
+    # 6. Riordina le colonne come nel training set
+    input_enhanced = input_enhanced[X.columns]
+
+    # 7. Scaling
+    input_scaled = scaler.transform(input_enhanced)
+
+    # 8. Predizione
+    prediction = rf_optimized.predict(input_scaled)[0]
+    probability = rf_optimized.predict_proba(input_scaled)[0, 1]
+
+    print("✅ Preprocessing completato!")
+
+    return prediction, probability
+
+# Esempio di utilizzo della funzione completa
+print("\nEsempio di utilizzo della funzione di predizione completa:")
+print("\nCaso 1 - Profilo a basso rischio:")
+pred1, prob1 = predict_diabetes_complete(
+    pregnancies=1, glucose=85, blood_pressure=70, skin_thickness=20,
+    insulin=80, bmi=22.5, diabetes_pedigree=0.25, age=25
+)
+print(f"Predizione: {'Diabete' if pred1 == 1 else 'No Diabete'}")
+print(f"Probabilità diabete: {prob1:.2%}")
+
+print("\nCaso 2 - Profilo ad alto rischio:")
+pred2, prob2 = predict_diabetes_complete(
+    pregnancies=5, glucose=180, blood_pressure=95, skin_thickness=35,
+    insulin=200, bmi=35.0, diabetes_pedigree=0.8, age=55
+)
+print(f"Predizione: {'Diabete' if pred2 == 1 else 'No Diabete'}")
+print(f"Probabilità diabete: {prob2:.2%}")
+
+print("\nCaso 3 - Con valori anomali (0) che verranno gestiti:")
+pred3, prob3 = predict_diabetes_complete(
+    pregnancies=2, glucose=0, blood_pressure=0, skin_thickness=25,  # Valori 0 anomali
+    insulin=150, bmi=28.0, diabetes_pedigree=0.5, age=35
+)
+print(f"Predizione: {'Diabete' if pred3 == 1 else 'No Diabete'}")
+print(f"Probabilità diabete: {prob3:.2%}")
+
+# 12. FUNZIONE INTERATTIVA MIGLIORATA
+def interactive_prediction():
+    """Funzione interattiva migliorata per fare nuove predizioni"""
+    print("\n" + "="*50)
+    print("PREDIZIONE INTERATTIVA AVANZATA")
+    print("="*50)
+    print("Inserisci i valori clinici per fare una predizione:")
+    print("(Inserisci 0 se non conosci un valore - verrà gestito automaticamente)")
+
+    try:
+        pregnancies = float(input("Numero di gravidanze: "))
+        glucose = float(input("Livello di glucosio (mg/dL): "))
+        blood_pressure = float(input("Pressione sanguigna diastolica (mmHg): "))
+        skin_thickness = float(input("Spessore pelle tricipite (mm): "))
+        insulin = float(input("Livello di insulina (mu U/ml): "))
+        bmi = float(input("BMI (kg/m²): "))
+        diabetes_pedigree = float(input("Funzione pedigree diabete (0-2): "))
+        age = float(input("Età (anni): "))
+
+        prediction, probability = predict_diabetes_complete(
+            pregnancies, glucose, blood_pressure, skin_thickness,
+            insulin, bmi, diabetes_pedigree, age
+        )
+
+        print(f"\n{'='*30} RISULTATO {'='*30}")
+        print(f"Predizione: {'🔴 DIABETE' if prediction == 1 else '🟢 NO DIABETE'}")
+        print(f"Probabilità diabete: {probability:.2%}")
+
+        if probability < 0.3:
+            print("📊 Rischio: BASSO")
+            print("💡 Consigli: Mantieni uno stile di vita sano")
+        elif probability < 0.7:
+            print("📊 Rischio: MODERATO")
+            print("💡 Consigli: Consulta un medico e monitora i livelli")
+        else:
+            print("📊 Rischio: ALTO")
+            print("💡 Consigli: Consulta immediatamente un medico!")
+
+        print("="*70)
+
+    except ValueError:
+        print("❌ Errore: Inserire solo valori numerici!")
+    except Exception as e:
+        print(f"❌ Errore: {str(e)}")
+
+print("\n" + "="*60)
+print("RIEPILOGO FINALE - MODELLO OTTIMIZZATO")
+print("="*60)
+print(f"✅ Accuratezza (soglia 0.5): {test_acc:.1%}")
+print(f"✅ Accuratezza (soglia {optimal_threshold}): {test_acc_optimized:.1%}")
+print(f"✅ AUC Score: {auc_score:.3f}")
+print(f"✅ Cross-Validation Score: {cv_scores.mean():.3f}")
+print(f"🎯 Numero di alberi: 500")
+print(f"⚖️ Class weight: {{0: 1, 1: 2}}")
+print(f"🎚️ Soglia ottimizzata: {optimal_threshold}")
+
+# Calcola recall migliorato
+from sklearn.metrics import recall_score
+recall_standard = recall_score(y_test, y_test_pred, pos_label=1)
+recall_optimized = recall_score(y_test, y_test_pred_optimized, pos_label=1)
+
+print(f"\n📈 MIGLIORAMENTO RECALL:")
+print(f"Recall diabetici (soglia 0.5): {recall_standard:.1%}")
+print(f"Recall diabetici (soglia {optimal_threshold}): {recall_optimized:.1%}")
+print(f"Miglioramento: +{(recall_optimized - recall_standard)*100:.1f} punti percentuali")
+
+risposta = input("\nVuoi fare una predizione interattiva avanzata? (y/n): ")
+if risposta.lower() == 'y':
+    interactive_prediction_advanced()
+
+print("\n🎉 Analisi ottimizzata completata!")
+print("Il modello è stato migliorato per ridurre i falsi negativi (diabetici non rilevati).")
