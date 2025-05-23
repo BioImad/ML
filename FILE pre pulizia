@@ -1,0 +1,568 @@
+# CODICE COMPLETO: DIABETES PREDICTION CON RANDOM FOREST OTTIMIZZATO
+# Include: EDA Completa + Modello Migliorato + Funzione Predizione + Ottimizzazioni
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, roc_auc_score, precision_recall_curve
+from imblearn.over_sampling import SMOTE
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+warnings.filterwarnings('ignore')
+
+# Configurazione per i grafici
+plt.style.use('default')
+sns.set_palette("husl")
+
+print("="*60)
+print("DIABETES PREDICTION - RANDOM FOREST ANALYSIS OTTIMIZZATO")
+print("="*60)
+
+# 1. CARICAMENTO DATI
+print("\n1. CARICAMENTO DATI")
+print("-" * 30)
+
+# Sostituisci con il path del tuo file
+df = pd.read_csv('diabetes.csv')  # <-- CAMBIA QUESTO PATH
+
+print(f"Dataset shape: {df.shape}")
+print(f"Features: {list(df.columns)}")
+
+# 2. EXPLORATORY DATA ANALYSIS (EDA)
+print("\n2. EXPLORATORY DATA ANALYSIS")
+print("-" * 30)
+
+# Informazioni generali sul dataset
+print("\nInformazioni generali:")
+print(df.info())
+
+print("\nStatistiche descrittive:")
+print(df.describe())
+
+# Controllo valori mancanti
+print(f"\nValori mancanti per colonna:")
+print(df.isnull().sum())
+
+# Target distribution
+print(f"\nDistribuzione target (Outcome):")
+target_counts = df['Outcome'].value_counts()
+print(target_counts)
+print(f"Percentuale diabetici: {target_counts[1]/len(df)*100:.1f}%")
+
+# Visualizzazione distribuzione target
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+# Grafico a barre
+target_counts.plot(kind='bar', ax=ax1, color=['skyblue', 'lightcoral'])
+ax1.set_title('Distribuzione Target')
+ax1.set_xlabel('Outcome (0=No Diabetes, 1=Diabetes)')
+ax1.set_ylabel('Frequenza')
+ax1.tick_params(axis='x', rotation=0)
+
+# Grafico a torta
+ax2.pie(target_counts.values, labels=['No Diabetes', 'Diabetes'],
+        autopct='%1.1f%%', colors=['skyblue', 'lightcoral'])
+ax2.set_title('Percentuale Diabetici vs Non Diabetici')
+
+plt.tight_layout()
+plt.show()
+
+# Distribuzione delle features numeriche
+print("\nDistribuzione delle features:")
+fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+axes = axes.ravel()
+
+features = df.columns[:-1]  # Tutte tranne 'Outcome'
+
+for i, feature in enumerate(features):
+    if i < len(axes):
+        # Istogramma
+        axes[i].hist(df[feature], bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+        axes[i].set_title(f'Distribuzione {feature}')
+        axes[i].set_xlabel(feature)
+        axes[i].set_ylabel('Frequenza')
+
+# Rimuovi subplot vuoti se necessario
+for i in range(len(features), len(axes)):
+    fig.delaxes(axes[i])
+
+plt.tight_layout()
+plt.show()
+
+# Boxplot per identificare outliers
+print("\nAnalisi Outliers:")
+fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+axes = axes.ravel()
+
+for i, feature in enumerate(features):
+    if i < len(axes):
+        df.boxplot(column=feature, ax=axes[i])
+        axes[i].set_title(f'Boxplot {feature}')
+
+# Rimuovi subplot vuoti se necessario
+for i in range(len(features), len(axes)):
+    fig.delaxes(axes[i])
+
+plt.tight_layout()
+plt.show()
+
+# Matrice di correlazione
+print("\nMatrice di Correlazione:")
+plt.figure(figsize=(12, 10))
+correlation_matrix = df.corr()
+mask = np.triu(np.ones_like(correlation_matrix, dtype=bool))
+sns.heatmap(correlation_matrix, mask=mask, annot=True, cmap='coolwarm', center=0,
+            square=True, fmt='.2f', cbar_kws={"shrink": .8})
+plt.title('Matrice di Correlazione delle Features')
+plt.tight_layout()
+plt.show()
+
+# Top correlazioni con il target
+print("\nCorrelazioni con il Target (Outcome):")
+target_corr = df.corr()['Outcome'].abs().sort_values(ascending=False)[1:]  # Escludi la correlazione con se stesso
+print(target_corr)
+
+# Analisi per diabetici vs non diabetici
+print("\nComparativo Diabetici vs Non Diabetici:")
+diabetic = df[df['Outcome'] == 1]
+non_diabetic = df[df['Outcome'] == 0]
+
+comparison_stats = pd.DataFrame({
+    'Non_Diabetic_Mean': non_diabetic.drop('Outcome', axis=1).mean(),
+    'Diabetic_Mean': diabetic.drop('Outcome', axis=1).mean(),
+    'Difference': diabetic.drop('Outcome', axis=1).mean() - non_diabetic.drop('Outcome', axis=1).mean()
+})
+print(comparison_stats.sort_values('Difference', key=abs, ascending=False))
+
+# Visualizzazione comparativa
+fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+axes = axes.ravel()
+
+for i, feature in enumerate(features):
+    if i < len(axes):
+        # Istogramma sovrapposto
+        axes[i].hist(non_diabetic[feature], bins=20, alpha=0.7, label='No Diabetes', color='skyblue')
+        axes[i].hist(diabetic[feature], bins=20, alpha=0.7, label='Diabetes', color='lightcoral')
+        axes[i].set_title(f'{feature} - Diabetici vs Non Diabetici')
+        axes[i].set_xlabel(feature)
+        axes[i].set_ylabel('Frequenza')
+        axes[i].legend()
+
+# Rimuovi subplot vuoti se necessario
+for i in range(len(features), len(axes)):
+    fig.delaxes(axes[i])
+
+plt.tight_layout()
+plt.show()
+
+# 3. FEATURE ENGINEERING
+print("\n3. FEATURE ENGINEERING")
+print("-" * 30)
+
+def add_derived_features(df):
+    """Aggiunge feature derivate basate su conoscenze mediche"""
+    df_new = df.copy()
+
+    # Categorie di rischio basate su valori medici standard
+    if 'Glucose' in df.columns:
+        df_new['Glucose_risk'] = (df['Glucose'] > 125).astype(int)
+        df_new['Glucose_very_high'] = (df['Glucose'] > 180).astype(int)
+        df_new['Glucose_normal'] = (df['Glucose'] <= 100).astype(int)
+
+    if 'BMI' in df.columns:
+        df_new['BMI_obese'] = (df['BMI'] > 30).astype(int)
+        df_new['BMI_overweight'] = ((df['BMI'] > 25) & (df['BMI'] <= 30)).astype(int)
+        df_new['BMI_normal'] = (df['BMI'] <= 25).astype(int)
+
+    if 'Age' in df.columns:
+        df_new['Age_high_risk'] = (df['Age'] > 45).astype(int)
+        df_new['Age_very_high_risk'] = (df['Age'] > 65).astype(int)
+        df_new['Age_young'] = (df['Age'] <= 30).astype(int)
+
+    if 'BloodPressure' in df.columns:
+        df_new['BP_high'] = (df['BloodPressure'] > 90).astype(int)
+        df_new['BP_very_high'] = (df['BloodPressure'] > 100).astype(int)
+        df_new['BP_normal'] = (df['BloodPressure'] <= 80).astype(int)
+
+    if 'Insulin' in df.columns:
+        df_new['Insulin_high'] = (df['Insulin'] > 200).astype(int)
+        df_new['Insulin_very_low'] = (df['Insulin'] == 0).astype(int)
+
+    # Interazioni medicamente rilevanti
+    if 'Glucose' in df.columns and 'BMI' in df.columns:
+        df_new['Glucose_BMI_risk'] = df_new['Glucose_risk'] * df_new['BMI_obese']
+        df_new['Glucose_BMI_interaction'] = df['Glucose'] * df['BMI'] / 1000
+
+    if 'Age' in df.columns and 'Glucose' in df.columns:
+        df_new['Age_Glucose_risk'] = df_new['Age_high_risk'] * df_new['Glucose_risk']
+        df_new['Age_Glucose_interaction'] = df['Age'] * df['Glucose'] / 1000
+
+    if 'Pregnancies' in df.columns and 'Age' in df.columns:
+        df_new['Pregnancy_Age_risk'] = (df['Pregnancies'] > 3) * df_new['Age_high_risk']
+
+    return df_new
+
+# Applica feature engineering
+df_enhanced = add_derived_features(df)
+print(f"Features originali: {df.shape[1]}")
+print(f"Features dopo engineering: {df_enhanced.shape[1]}")
+print(f"Nuove features: {list(df_enhanced.columns[len(df.columns):])}")
+
+# 4. PREPARAZIONE DATI PER IL MODELLO
+print("\n4. PREPARAZIONE DATI")
+print("-" * 30)
+
+# Separazione features e target
+X = df_enhanced.drop('Outcome', axis=1)
+y = df_enhanced['Outcome']
+
+# Split dei dati
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+print(f"Training set: {X_train.shape}")
+print(f"Test set: {X_test.shape}")
+
+# Scaling delle features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Applicazione SMOTE più aggressivo
+smote = SMOTE(sampling_strategy=0.8, random_state=42)  # Più bilanciamento
+X_train_smote, y_train_smote = smote.fit_resample(X_train_scaled, y_train)
+
+print(f"Prima di SMOTE - Classe 0: {sum(y_train == 0)}, Classe 1: {sum(y_train == 1)}")
+print(f"Dopo SMOTE - Classe 0: {sum(y_train_smote == 0)}, Classe 1: {sum(y_train_smote == 1)}")
+
+# 5. TRAINING RANDOM FOREST OTTIMIZZATO
+print("\n5. TRAINING RANDOM FOREST OTTIMIZZATO")
+print("-" * 30)
+
+# Random Forest con parametri ottimizzati per recall migliore
+rf_optimized = RandomForestClassifier(
+    n_estimators=300,          # Più alberi
+    max_depth=None,            # Più profondità
+    min_samples_split=2,
+    min_samples_leaf=1,
+    max_features='sqrt',
+    random_state=42,
+    class_weight={0: 1, 1: 2}, # Penalizza di più errori su diabetici
+    n_jobs=-1
+)
+
+# Training
+print("Training in corso...")
+rf_optimized.fit(X_train_smote, y_train_smote)
+
+# 6. VALUTAZIONE DEL MODELLO CON SOGLIA OTTIMIZZATA
+print("\n6. VALUTAZIONE DEL MODELLO")
+print("-" * 30)
+
+# Predizioni con soglia standard (0.5)
+y_train_pred = rf_optimized.predict(X_train_scaled)
+y_test_pred = rf_optimized.predict(X_test_scaled)
+y_test_proba = rf_optimized.predict_proba(X_test_scaled)[:, 1]
+
+# Predizioni con soglia ottimizzata (0.4 per migliorare recall)
+optimal_threshold = 0.4
+y_test_pred_optimized = (y_test_proba > optimal_threshold).astype(int)
+
+# Metriche con soglia standard
+train_acc = accuracy_score(y_train, y_train_pred)
+test_acc = accuracy_score(y_test, y_test_pred)
+auc_score = roc_auc_score(y_test, y_test_proba)
+
+print("RISULTATI CON SOGLIA STANDARD (0.5):")
+print(f"Accuratezza Training: {train_acc:.4f}")
+print(f"Accuratezza Test: {test_acc:.4f}")
+print(f"AUC Score: {auc_score:.4f}")
+
+# Cross-validation
+cv_scores = cross_val_score(rf_optimized, X_train_smote, y_train_smote, cv=5)
+print(f"CV Score medio: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
+
+print(f"\nClassification Report (Soglia 0.5):")
+print(classification_report(y_test, y_test_pred))
+
+# Metriche con soglia ottimizzata
+test_acc_optimized = accuracy_score(y_test, y_test_pred_optimized)
+
+print(f"\nRISULTATI CON SOGLIA OTTIMIZZATA ({optimal_threshold}):")
+print(f"Accuratezza Test: {test_acc_optimized:.4f}")
+
+print(f"\nClassification Report (Soglia {optimal_threshold}):")
+print(classification_report(y_test, y_test_pred_optimized))
+
+# Confronto delle confusion matrix
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+# Confusion Matrix soglia 0.5
+cm1 = confusion_matrix(y_test, y_test_pred)
+sns.heatmap(cm1, annot=True, fmt='d', cmap='Blues', ax=ax1,
+            xticklabels=['No Diabetes', 'Diabetes'],
+            yticklabels=['No Diabetes', 'Diabetes'])
+ax1.set_title('Confusion Matrix - Soglia 0.5')
+ax1.set_ylabel('Valori Reali')
+ax1.set_xlabel('Valori Predetti')
+
+# Confusion Matrix soglia ottimizzata
+cm2 = confusion_matrix(y_test, y_test_pred_optimized)
+sns.heatmap(cm2, annot=True, fmt='d', cmap='Oranges', ax=ax2,
+            xticklabels=['No Diabetes', 'Diabetes'],
+            yticklabels=['No Diabetes', 'Diabetes'])
+ax2.set_title(f'Confusion Matrix - Soglia {optimal_threshold}')
+ax2.set_ylabel('Valori Reali')
+ax2.set_xlabel('Valori Predetti')
+
+plt.tight_layout()
+plt.show()
+
+# Precision-Recall Curve per trovare soglia ottimale
+precision, recall, thresholds = precision_recall_curve(y_test, y_test_proba)
+plt.figure(figsize=(10, 6))
+plt.plot(thresholds, precision[:-1], 'b-', label='Precision')
+plt.plot(thresholds, recall[:-1], 'r-', label='Recall')
+plt.axvline(x=optimal_threshold, color='g', linestyle='--', label=f'Soglia Ottimale ({optimal_threshold})')
+plt.xlabel('Soglia')
+plt.ylabel('Score')
+plt.title('Precision-Recall vs Soglia')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Feature Importance
+feature_importance = pd.DataFrame({
+    'feature': X.columns,
+    'importance': rf_optimized.feature_importances_
+}).sort_values('importance', ascending=False)
+
+print(f"\nTop 15 Feature più Importanti:")
+print(feature_importance.head(15))
+
+# Visualizzazione Feature Importance
+plt.figure(figsize=(12, 10))
+top_features = feature_importance.head(20)
+plt.barh(range(len(top_features)), top_features['importance'])
+plt.yticks(range(len(top_features)), top_features['feature'])
+plt.xlabel('Importanza')
+plt.title('Top 20 Feature Importance - Random Forest Ottimizzato')
+plt.gca().invert_yaxis()
+plt.tight_layout()
+plt.show()
+
+# 7. GRID SEARCH OPZIONALE
+print("\n7. GRID SEARCH OPZIONALE")
+print("-" * 30)
+
+risposta = input("Vuoi eseguire Grid Search per parametri ancora più ottimali? (y/n): ")
+
+if risposta.lower() == 'y':
+    print("Esecuzione Grid Search ottimizzato... (può richiedere alcuni minuti)")
+
+    param_grid = {
+        'n_estimators': [200, 300, 400],
+        'max_depth': [15, 20, None],
+        'min_samples_split': [2, 3],
+        'min_samples_leaf': [1, 2],
+        'class_weight': [{0: 1, 1: 1.5}, {0: 1, 1: 2}, {0: 1, 1: 2.5}]
+    }
+
+    rf_grid = RandomForestClassifier(random_state=42, n_jobs=-1, max_features='sqrt')
+    grid_search = GridSearchCV(
+        rf_grid, param_grid,
+        cv=3,
+        scoring='recall',  # Ottimizza per recall
+        n_jobs=-1,
+        verbose=1
+    )
+
+    grid_search.fit(X_train_smote, y_train_smote)
+
+    print(f"Migliori parametri: {grid_search.best_params_}")
+    print(f"Miglior CV recall: {grid_search.best_score_:.4f}")
+
+    # Test con i migliori parametri
+    best_rf = grid_search.best_estimator_
+    y_test_pred_best = best_rf.predict(X_test_scaled)
+    y_test_proba_best = best_rf.predict_proba(X_test_scaled)[:, 1]
+    y_test_pred_best_optimized = (y_test_proba_best > optimal_threshold).astype(int)
+
+    print(f"\nRisultati con parametri ottimali:")
+    print(f"Accuratezza (soglia 0.5): {accuracy_score(y_test, y_test_pred_best):.4f}")
+    print(f"Accuratezza (soglia {optimal_threshold}): {accuracy_score(y_test, y_test_pred_best_optimized):.4f}")
+    print(f"\nClassification Report (migliori parametri, soglia {optimal_threshold}):")
+    print(classification_report(y_test, y_test_pred_best_optimized))
+
+    # Aggiorna il modello se migliore
+    rf_optimized = best_rf
+
+# 8. FUNZIONE DI PREDIZIONE MIGLIORATA
+print("\n8. FUNZIONE DI PREDIZIONE MIGLIORATA")
+print("-" * 30)
+
+def predict_diabetes_advanced(pregnancies, glucose, blood_pressure, skin_thickness,
+                             insulin, bmi, diabetes_pedigree, age, threshold=0.4):
+    """
+    Predice la probabilità di diabete con soglia ottimizzata
+
+    Parametri:
+    - pregnancies: Numero di gravidanze
+    - glucose: Livello di glucosio nel sangue
+    - blood_pressure: Pressione sanguigna diastolica
+    - skin_thickness: Spessore della pelle del tricipite
+    - insulin: Livello di insulina
+    - bmi: Indice di massa corporea
+    - diabetes_pedigree: Funzione pedigree del diabete
+    - age: Età
+    - threshold: Soglia per la classificazione (default 0.4)
+
+    Ritorna:
+    - prediction: 0 (No Diabetes) o 1 (Diabetes)
+    - probability: Probabilità di avere il diabete (0-1)
+    - risk_level: Livello di rischio (Basso/Moderato/Alto)
+    """
+
+    # Crea DataFrame con i valori inseriti
+    input_data = pd.DataFrame({
+        'Pregnancies': [pregnancies],
+        'Glucose': [glucose],
+        'BloodPressure': [blood_pressure],
+        'SkinThickness': [skin_thickness],
+        'Insulin': [insulin],
+        'BMI': [bmi],
+        'DiabetesPedigreeFunction': [diabetes_pedigree],
+        'Age': [age]
+    })
+
+    # Applica lo stesso feature engineering
+    input_enhanced = add_derived_features(input_data)
+
+    # Assicurati che abbia le stesse colonne del training set
+    for col in X.columns:
+        if col not in input_enhanced.columns:
+            input_enhanced[col] = 0
+
+    # Riordina le colonne come nel training set
+    input_enhanced = input_enhanced[X.columns]
+
+    # Scaling
+    input_scaled = scaler.transform(input_enhanced)
+
+    # Predizione con soglia ottimizzata
+    probability = rf_optimized.predict_proba(input_scaled)[0, 1]
+    prediction = (probability > threshold).astype(int)
+
+    # Determina il livello di rischio
+    if probability < 0.3:
+        risk_level = "BASSO"
+    elif probability < 0.7:
+        risk_level = "MODERATO"
+    else:
+        risk_level = "ALTO"
+
+    return prediction, probability, risk_level
+
+# Esempi di utilizzo della funzione migliorata
+print("\nEsempi di utilizzo della funzione di predizione migliorata:")
+print("Caso 1 - Profilo a basso rischio:")
+pred1, prob1, risk1 = predict_diabetes_advanced(
+    pregnancies=1, glucose=85, blood_pressure=70, skin_thickness=20,
+    insulin=80, bmi=22.5, diabetes_pedigree=0.25, age=25
+)
+print(f"Predizione: {'Diabete' if pred1 == 1 else 'No Diabete'}")
+print(f"Probabilità diabete: {prob1:.2%}")
+print(f"Livello di rischio: {risk1}")
+
+print("\nCaso 2 - Profilo ad alto rischio:")
+pred2, prob2, risk2 = predict_diabetes_advanced(
+    pregnancies=5, glucose=180, blood_pressure=95, skin_thickness=35,
+    insulin=200, bmi=35.0, diabetes_pedigree=0.8, age=55
+)
+print(f"Predizione: {'Diabete' if pred2 == 1 else 'No Diabete'}")
+print(f"Probabilità diabete: {prob2:.2%}")
+print(f"Livello di rischio: {risk2}")
+
+# 9. FUNZIONE INTERATTIVA MIGLIORATA
+def interactive_prediction_advanced():
+    """Funzione interattiva migliorata per fare nuove predizioni"""
+    print("\n" + "="*60)
+    print("PREDIZIONE INTERATTIVA AVANZATA")
+    print("="*60)
+    print("Inserisci i valori clinici per fare una predizione ottimizzata:")
+
+    try:
+        pregnancies = float(input("Numero di gravidanze: "))
+        glucose = float(input("Livello di glucosio (mg/dL): "))
+        blood_pressure = float(input("Pressione sanguigna diastolica (mmHg): "))
+        skin_thickness = float(input("Spessore pelle tricipite (mm): "))
+        insulin = float(input("Livello di insulina (mu U/ml): "))
+        bmi = float(input("BMI (kg/m²): "))
+        diabetes_pedigree = float(input("Funzione pedigree diabete (0-2): "))
+        age = float(input("Età (anni): "))
+
+        prediction, probability, risk_level = predict_diabetes_advanced(
+            pregnancies, glucose, blood_pressure, skin_thickness,
+            insulin, bmi, diabetes_pedigree, age
+        )
+
+        print(f"\n{'='*20} RISULTATO OTTIMIZZATO {'='*20}")
+        print(f"Predizione: {'🔴 DIABETE' if prediction == 1 else '🟢 NO DIABETE'}")
+        print(f"Probabilità diabete: {probability:.2%}")
+        print(f"📊 Rischio: {risk_level}")
+
+        # Raccomandazioni basate sul rischio
+        if risk_level == "BASSO":
+            print("\n💡 Raccomandazioni:")
+            print("- Mantieni uno stile di vita sano")
+            print("- Controlli periodici di routine")
+        elif risk_level == "MODERATO":
+            print("\n⚠️ Raccomandazioni:")
+            print("- Monitora i livelli di glucosio più frequentemente")
+            print("- Considera modifiche alla dieta e all'esercizio")
+            print("- Consulta il medico per valutazioni più approfondite")
+        else:
+            print("\n🚨 Raccomandazioni:")
+            print("- Consulta immediatamente un medico")
+            print("- Richiedi test diagnostici approfonditi")
+            print("- Considera interventi preventivi immediati")
+
+        print("="*60)
+
+    except ValueError:
+        print("❌ Errore: Inserire solo valori numerici!")
+    except Exception as e:
+        print(f"❌ Errore: {str(e)}")
+
+# 10. RIEPILOGO FINALE
+print("\n" + "="*60)
+print("RIEPILOGO FINALE - MODELLO OTTIMIZZATO")
+print("="*60)
+print(f"✅ Accuratezza (soglia 0.5): {test_acc:.1%}")
+print(f"✅ Accuratezza (soglia {optimal_threshold}): {test_acc_optimized:.1%}")
+print(f"✅ AUC Score: {auc_score:.3f}")
+print(f"✅ Cross-Validation Score: {cv_scores.mean():.3f}")
+print(f"🎯 Numero di alberi: 300")
+print(f"⚖️ Class weight: {{0: 1, 1: 2}}")
+print(f"🎚️ Soglia ottimizzata: {optimal_threshold}")
+
+# Calcola recall migliorato
+from sklearn.metrics import recall_score
+recall_standard = recall_score(y_test, y_test_pred, pos_label=1)
+recall_optimized = recall_score(y_test, y_test_pred_optimized, pos_label=1)
+
+print(f"\n📈 MIGLIORAMENTO RECALL:")
+print(f"Recall diabetici (soglia 0.5): {recall_standard:.1%}")
+print(f"Recall diabetici (soglia {optimal_threshold}): {recall_optimized:.1%}")
+print(f"Miglioramento: +{(recall_optimized - recall_standard)*100:.1f} punti percentuali")
+
+risposta = input("\nVuoi fare una predizione interattiva avanzata? (y/n): ")
+if risposta.lower() == 'y':
+    interactive_prediction_advanced()
+
+print("\n🎉 Analisi ottimizzata completata!")
+print("Il modello è stato migliorato per ridurre i falsi negativi (diabetici non rilevati).")
